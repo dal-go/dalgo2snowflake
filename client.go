@@ -13,13 +13,14 @@ import (
 )
 
 type Client struct {
-	endpoint  string
-	options   Options
-	transport http.RoundTripper
-	owned     *http.Transport
-	mu        sync.Mutex
-	closed    bool
-	active    map[*operation]struct{}
+	endpoint     string
+	options      Options
+	transport    http.RoundTripper
+	owned        *http.Transport
+	mu           sync.Mutex
+	closed       bool
+	active       map[*operation]struct{}
+	stateChanged chan struct{}
 }
 
 func name(s string) bool {
@@ -96,7 +97,7 @@ func New(endpoint string, options Options) (*Client, error) {
 	t.MaxConnsPerHost = options.MaxConcurrent * 2
 	t.ResponseHeaderTimeout = options.Timeout
 	t.TLSHandshakeTimeout = options.Timeout
-	return &Client{endpoint: "https://" + u.Host, options: options, transport: t, owned: t, active: make(map[*operation]struct{})}, nil
+	return &Client{endpoint: "https://" + u.Host, options: options, transport: t, owned: t, active: make(map[*operation]struct{}), stateChanged: make(chan struct{})}, nil
 }
 
 type operation struct {
@@ -158,7 +159,13 @@ func (o *operation) check() error {
 }
 func (o *operation) releaseLocked() {
 	if o.finished && o.physical == 0 {
-		delete(o.client.active, o)
+		if _, present := o.client.active[o]; present {
+			delete(o.client.active, o)
+			// The empty snapshot and this generation are always observed under
+			// the same mutex. Repeated finish calls cannot fabricate progress.
+			close(o.client.stateChanged)
+			o.client.stateChanged = make(chan struct{})
+		}
 	}
 }
 func (o *operation) track() { o.client.mu.Lock(); o.physical++; o.client.mu.Unlock() }

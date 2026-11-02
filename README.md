@@ -156,6 +156,27 @@ work. Only adapter-owned staging runs asynchronously. Client Close cancels owned
 active operations and owned idle connections, without destroying the supplied
 transport or waiting for hostile work.
 
+`Shutdown(ctx)` adds a terminal bounded drain for process owners. It first calls
+the existing nonblocking `Close`, then waits for the **entire** admitted logical
+operation map to empty, including inline caller callbacks, late transport/body
+work and independent captured-submit cancellation. Its own monotonic upper cap
+is two seconds; a shorter wait-context deadline or cancellation takes priority.
+A nil or pre-aborted context still fences/closes the client, then returns a safe
+input/context error. Concurrent and repeated calls are idempotent. No waiter
+goroutine, unconditional sleep or forced operation/physical-credit release is
+used. A timed-out call may be followed by another Shutdown after genuine work
+settles; it never cancels the independent cleanup simply because its waiter left.
+
+Always close records and recordset readers **before** Shutdown. An unfinished
+reader remains a logical operation even with no network work, and causes an
+honest bounded timeout. Shutdown can likewise time out while a synchronous
+caller callback is held; that callback is not abandoned or asynchronously mapped.
+Nil confirms local logical/physical quiescence, not remote cancellation success,
+hosted termination or warehouse/credit bounds. A command may preserve its
+original caller/deadline error while using a separate cleanup wait context;
+that cleanup can extend wall time by up to two seconds. Keep the original error
+and recheck the original context before committing output.
+
 Defaults (maximum configurable values in parentheses): timeout60s (120s),
 operations4 (16), keys100 (1000), aggregate rows10000 (100000), aggregate request
 bodies64KiB (1MiB), aggregate response bodies16MiB (32MiB), page4MiB (16MiB),
